@@ -165,7 +165,7 @@ The tool descriptions influence how the LLM uses them. `rl_protect_scan` include
 
 1. Clone the repository:
    ```sh
-   git clone https://github.rl.lan/swa-integrations/rl-mcp.git
+   git clone https://github.com/reversinglabs/rl-mcp-community
    ```
 2. Navigate to the `community` directory:
    ```sh
