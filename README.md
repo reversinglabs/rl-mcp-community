@@ -21,7 +21,7 @@ It runs as a Docker container and integrates with any MCP client (Gemini CLI, Cl
       - [Example 3: Comparing package versions](#example-3-comparing-package-versions)
     - [Adjusting tool usage with custom prompts](#adjusting-tool-usage-with-custom-prompts)
   - [Installation and usage](#installation-and-usage)
-    - [Building the Docker image](#building-the-docker-image)
+    - [Getting the Docker image](#getting-the-docker-image)
     - [Mounting your project directory](#mounting-your-project-directory)
     - [Example setup with Gemini CLI](#example-setup-with-gemini-cli)
     - [Example setup with Claude Code](#example-setup-with-claude-code)
@@ -161,22 +161,16 @@ The tool descriptions influence how the LLM uses them. `rl_protect_scan` include
 - [Docker](https://www.docker.com/products/docker-desktop/)
 - A ReversingLabs Spectra Assure account ([Community](https://secure.software) or Enterprise)
 
-### Building the Docker image
+### Getting the Docker image
 
-1. Clone the repository:
-   ```sh
-   git clone https://github.com/reversinglabs/rl-mcp-community
-   ```
-2. Navigate to the `community` directory:
-   ```sh
-   cd rl-mcp/community
-   ```
-3. Build the Docker image:
-   ```sh
-   docker build -t rl-mcp-community .
-   ```
+The image is on Docker Hub. Docker pulls it automatically on first run, so just configure your MCP client as shown below.
 
-Once the image is built, configure your MCP client to use it. Examples for different clients are listed further in this guide.
+To build it yourself (e.g. to add a corporate CA certificate):
+
+```sh
+git clone https://github.com/reversinglabs/rl-mcp
+docker build -t reversinglabs/rl-mcp-community:latest rl-mcp
+```
 
 ### Mounting your project directory
 
@@ -212,7 +206,7 @@ NOTE: A local `.gemini/settings.json` in your project's directory can override t
         "run", "--rm", "-i",
         "-e", "RL_TOKEN=rlcmm-your-token-here",
         "-v", "/path/to/your/project:/project",  // optional: for manifest scanning
-        "rl-mcp-community"
+        "reversinglabs/rl-mcp-community:latest"
       ]
     }
   }
@@ -232,7 +226,7 @@ NOTE: A local `.gemini/settings.json` in your project's directory can override t
         "-e", "RL_PORTAL_SERVER=https://my.secure.software/organization",
         "-e", "RL_PORTAL_ORG=MyOrganization",
         "-v", "/path/to/your/project:/project",  // optional: for manifest scanning
-        "rl-mcp-community"
+        "reversinglabs/rl-mcp-community:latest"
       ]
     }
   }
@@ -246,7 +240,7 @@ claude mcp add --transport stdio rl-protect \
   -- docker run --rm -i \
   -e RL_TOKEN=rlcmm-your-token-here \
   -v /path/to/your/project:/project \
-  rl-mcp-community
+  reversinglabs/rl-mcp-community:latest
 ```
 
 Note: the token must be passed via `-e` in the Docker args, not via `--env`, since `--env` sets variables on the host process and they don't propagate into the container. The `-v` mount is optional and only required for manifest scanning.
@@ -266,7 +260,7 @@ Add to your Claude Desktop configuration file:
         "run", "--rm", "-i",
         "-e", "RL_TOKEN=rlcmm-your-token-here",
         "-v", "/path/to/your/project:/project",
-        "rl-mcp-community"
+        "reversinglabs/rl-mcp-community:latest"
       ]
     }
   }
@@ -303,7 +297,7 @@ The `-v` mount is optional and only required for manifest scanning with `rl_prot
          - RL_TOKEN=rlcmm-your-token-here
          - -v
          - /path/to/your/project:/project  # optional: for manifest scanning
-         - rl-mcp-community
+         - reversinglabs/rl-mcp-community:latest
        env: {}
    ```
 
@@ -335,7 +329,7 @@ All configuration is via environment variables passed to the container.
 | `RL_PROFILE` | rl-protect default | Scan profile: `minimum`, `baseline`, `hardened`, or path to custom profile |
 | `RL_CONCURRENCY` | — | Number of threads for dependency lookups |
 | `RL_SCAN_TIMEOUT` | `600` | Scan timeout in seconds |
-| `RL_PROTECT_BIN` | `/opt/rl-protect/rl-protect` | Path to the `rl-protect` binary |
+| `RL_PROTECT_BIN` | `rl-protect` | Path to the `rl-protect` binary |
 | `RL_REPORTS_DIR` | `/app/reports` | Directory where scan reports are stored inside the container |
 | `RL_SCRIPTS_DIR` | `/app/scripts` | Directory where interpretation scripts are located inside the container |
 
