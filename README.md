@@ -343,4 +343,5 @@ All configuration is via environment variables passed to the container.
 | `RL_PROXY_USER` | Proxy username |
 | `RL_PROXY_PASSWORD` | Proxy password |
 
-<!-- rebuild docker: 2026-04-09 rl-protect 1.0.1.0-->
+<!-- rebuild docker: 2026-04-09; rl-protect 1.0.1.0 -->
+<!-- rebuild docker: 2026-04-09; rl-protect 1.0.2.0 -->
