@@ -3,7 +3,7 @@ import json
 import logging
 from pathlib import Path
 
-from src.server import REPORTS_DIR, SCRIPTS_DIR, mcp
+from src.server import OUTPUT_DIR, REPORTS_DIR, SCRIPTS_DIR, mcp
 
 logger = logging.getLogger(__name__)
 
@@ -132,6 +132,82 @@ async def rl_protect_interpret(report_id: str, task: str, package: str | None = 
         return json.dumps({"task": task, "exit_code": 0, "packages": [], "message": msg})
 
     return json.dumps(s.TASKS_JSON[task](packages))
+
+
+def _validate_output_path(output_path: str) -> Path:
+    """Resolve output_path and ensure it stays within OUTPUT_DIR."""
+    output_dir = Path(OUTPUT_DIR).resolve()
+    resolved = (output_dir / output_path).resolve()
+    if output_dir not in (resolved, *resolved.parents):
+        raise ValueError(
+            f"output_path must be within {OUTPUT_DIR}. "
+            f"Got: {output_path!r} (resolved to {resolved})"
+        )
+    return resolved
+
+
+@mcp.tool()
+async def rl_protect_report(
+    report_id: str,
+    template: str | None = None,
+    output_path: str | None = None,
+) -> str:
+    """Generate a Markdown report from a saved rl-protect scan report.
+
+    Produces a structured Markdown document with package findings, assessment
+    details, vulnerability tables, governance and policy callouts, and a
+    prioritised version update plan.
+
+    Template options (default: expanded):
+      concise  — summary table linked to Spectra Assure Community + version update plan only;
+                 no per-package detail sections
+      expanded — rejected packages with simplified assessment, vulnerability table, and license info
+      verbose  — full detail: rejected + warnings + passing, assessment table,
+                 policy violations table, override audit trail
+
+    To save the report to a file instead of returning it as a string, pass output_path.
+    output_path must point inside the /output mount (RL_OUTPUT_DIR). Mount a host
+    directory there read-write and keep your project mount read-only:
+
+      docker run --rm -i \\
+        -e RL_TOKEN=... \\
+        -v /path/to/project:/project:ro \\
+        -v /path/to/reports:/output \\
+        rl-mcp-community
+
+    Then pass output_path="/output/report.md". The file will appear on the host at
+    /path/to/reports/report.md. When output_path is omitted, the Markdown is returned
+    as a string.
+
+    Args:
+        report_id: The report_id returned by rl_protect_scan().
+        template: Report template: concise, expanded, or verbose. Default: expanded.
+        output_path: Container path inside /output to write the Markdown file.
+            When provided, returns the path instead of the Markdown string.
+    """
+    s = _load_script("make_report.py")
+    path = _report_path(report_id)
+    report_data = json.loads(path.read_text(encoding="utf-8"))
+
+    if template is None:
+        config = s.ReportConfig()
+    elif template in s.TEMPLATES:
+        config = s.TEMPLATES[template]
+    else:
+        raise ValueError(
+            f"Invalid template '{template}'. "
+            f"Must be one of: {', '.join(sorted(s.TEMPLATES))}."
+        )
+
+    markdown = s.build_report(report_data, config, report_path=str(path))
+
+    if output_path:
+        dest = _validate_output_path(output_path)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(markdown, encoding="utf-8")
+        return str(dest)
+
+    return markdown
 
 
 @mcp.tool()

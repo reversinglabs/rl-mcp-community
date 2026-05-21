@@ -25,6 +25,11 @@ def _make_report_id(name: str) -> str:
     return f"{name}-{suffix}"
 
 
+def _normalize_purls(purls: str) -> str:
+    """Strip whitespace around commas in a PURL list (e.g. 'a, b' → 'a,b')."""
+    return ",".join(p.strip() for p in purls.split(","))
+
+
 def _run_scan(
     target: str,
     *,
@@ -32,11 +37,13 @@ def _run_scan(
     profile: str | None = None,
     extra_args: list[str] | None = None,
 ) -> tuple[dict, str]:
-    """Run rl-protect scan. Returns (parsed_report, report_id)."""
+    """Run rl-protect scan. Returns (parsed_report, report_id).
+
+    `target` is passed verbatim to rl-protect — callers normalize as needed
+    (PURL lists go through _normalize_purls; manifest paths are passed as-is).
+    """
     with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
         report_path = f.name
-
-    target = ",".join(p.strip() for p in target.split(","))
 
     try:
         cmd = [
@@ -92,7 +99,15 @@ def _worst_status(assessment: dict) -> str:
 _ASSESSMENT_PRIORITY = ["malware", "tampering", "vulnerabilities", "secrets", "hardening", "licenses"]
 
 
-def _worst_label(assessment: dict) -> str:
+def _get_effective_status(entry: dict) -> str:
+    return (entry.get("override") or {}).get("to_status") or entry.get("status", "pass")
+
+
+def _worst_label(analysis: dict) -> str:
+    for g in analysis.get("policy", {}).get("governance", []):
+        if g.get("status") == "blocked":
+            return "Governance block"
+    assessment = analysis.get("assessment", {})
     ws = _worst_status(assessment)
     repo = assessment.get("repository", {})
     if repo.get("status", "pass") != "pass":
@@ -100,25 +115,29 @@ def _worst_label(assessment: dict) -> str:
     for k in _ASSESSMENT_PRIORITY:
         if assessment.get(k, {}).get("status") == ws:
             return assessment.get(k, {}).get("label", "")
+    for v in analysis.get("policy", {}).get("violations", {}).values():
+        if _get_effective_status(v) in ("fail", "warning"):
+            return "Policy violation"
     return ""
 
 
 def _format_result(report: dict, report_id: str) -> str:
     """Return a compact scan result: one row per package, summary counts, report_id."""
-    analysis = report.get("analysis", {})
-    report_data = analysis.get("report", {})
+    report_analysis = report.get("analysis", {})
+    report_data = report_analysis.get("report", {})
 
     packages = []
     n_reject = n_warn = 0
     for pkg in report_data.get("packages", []):
-        rec = pkg.get("analysis", {}).get("recommendation", "APPROVE")
-        assessment = pkg.get("analysis", {}).get("assessment", {})
+        pkg_analysis = pkg.get("analysis", {})
+        rec = pkg_analysis.get("recommendation", "APPROVE")
+        assessment = pkg_analysis.get("assessment", {})
         ws = _worst_status(assessment)
         packages.append({
             "purl": pkg.get("purl", ""),
             "recommendation": rec,
             "worst_status": ws,
-            "worst_label": _worst_label(assessment),
+            "worst_label": _worst_label(pkg_analysis),
         })
         if rec == "REJECT":
             n_reject += 1
@@ -129,9 +148,9 @@ def _format_result(report: dict, report_id: str) -> str:
     return json.dumps({
         "report_id": report_id,
         "metadata": {
-            "timestamp": analysis.get("timestamp"),
-            "duration": analysis.get("duration"),
-            "profile": analysis.get("profile", {}).get("name"),
+            "timestamp": report_analysis.get("timestamp"),
+            "duration": report_analysis.get("duration"),
+            "profile": report_analysis.get("profile", {}).get("name"),
         },
         "summary": {
             "reject": n_reject,
@@ -231,7 +250,8 @@ async def rl_protect_scan(
     """
     extra_args = ["--check-deps", check_deps] if check_deps else None
     report, report_id = await asyncio.to_thread(
-        _run_scan, purls, report_name=report_name, profile=profile, extra_args=extra_args,
+        _run_scan, _normalize_purls(purls),
+        report_name=report_name, profile=profile, extra_args=extra_args,
     )
     return _format_result(report, report_id)
 
@@ -253,7 +273,7 @@ async def rl_protect_scan_manifest(
     and cannot access host files directly. The user must mount their project directory
     when starting the container:
 
-      docker run --rm -i -e RL_TOKEN=... -v /path/to/project:/project rl-mcp-community
+      docker run --rm -i -e RL_TOKEN=... -v /path/to/project:/project:ro rl-mcp-community
 
     Then pass container-relative paths like "/project/package.json".
 

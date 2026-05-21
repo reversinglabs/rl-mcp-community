@@ -7,7 +7,7 @@ FROM python:3.12-slim
 WORKDIR /app
 COPY . /app
 
-RUN mkdir -p /app/reports && \
+RUN mkdir -p /app/reports /output && \
     pip install .
 
 CMD ["rl-mcp-community"]

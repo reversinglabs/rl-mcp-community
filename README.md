@@ -15,6 +15,7 @@ It runs as a Docker container and integrates with any MCP client (Gemini CLI, Cl
       - [`rl_protect_summarize`](#rl_protect_summarize)
       - [`rl_protect_interpret`](#rl_protect_interpret)
       - [`rl_protect_diff_behavior`](#rl_protect_diff_behavior)
+      - [`rl_protect_report`](#rl_protect_report)
     - [Examples](#examples)
       - [Example 1: Checking a specific package version](#example-1-checking-a-specific-package-version)
       - [Example 2: Scanning a manifest file](#example-2-scanning-a-manifest-file)
@@ -122,6 +123,27 @@ Compare behaviors between two versions of the same package. Detects suspicious c
 *   `old_version` / `new_version` (str, optional): Pin specific versions when more than two are present.
 *   `reverse` (bool, optional): Swap old and new (use when downgrading).
 
+#### `rl_protect_report`
+
+Generate a structured Markdown report from a saved scan report. The report includes a summary table, per-package assessment details, malware and governance callouts, a vulnerability table, and a prioritised version update plan.
+
+**Arguments:**
+
+*   `report_id` (str, required): The `report_id` returned by `rl_protect_scan`.
+*   `template` (str, optional): Report template controlling the level of detail. Default: `expanded`.
+
+    | Template | Content |
+    |----------|---------|
+    | `concise` | Summary table (linked to Spectra Assure Community) + Version Update Plan only |
+    | `expanded` | Rejected packages with assessment, vulnerabilities, and license info |
+    | `verbose` | Full detail: rejected + warnings + passing, assessment table, policy violations |
+
+*   `output_path` (str, optional): Container path inside `/output` where the Markdown file will be written (e.g. `"/output/report.md"`). Requires the `/output` volume mount. When omitted, the Markdown is returned as a string.
+
+**Returns:**
+
+The file path (when `output_path` is provided) or a Markdown string (when omitted).
+
 ### Examples
 
 #### Example 1: Checking a specific package version
@@ -140,7 +162,7 @@ Compare behaviors between two versions of the same package. Detects suspicious c
 > Scan my project dependencies for security issues
 > ```
 >
-> The container must have the project directory mounted (`-v /path/to/project:/project`). The LLM calls `rl_protect_scan_manifest` with the path to the manifest file (e.g. `"/project/package.json"`). It can then use `rl_protect_interpret` to drill into specific findings.
+> The container must have the project directory mounted (`-v /path/to/project:/project:ro`). The LLM calls `rl_protect_scan_manifest` with the path to the manifest file (e.g. `"/project/package.json"`). It can then use `rl_protect_interpret` to drill into specific findings.
 
 #### Example 3: Comparing package versions
 
@@ -174,15 +196,16 @@ docker build -t reversinglabs/rl-mcp-community:latest rl-mcp
 
 ### Mounting your project directory
 
-The `rl_protect_scan_manifest` tool scans manifest and lock files inside the container. Since the container cannot access your host filesystem by default, you must mount your project directory when starting the container:
+The container cannot access your host filesystem by default. Two optional volume mounts extend its capabilities:
 
-```sh
--v /path/to/your/project:/project
-```
+| Mount | Purpose | Access |
+|-------|---------|--------|
+| `-v /path/to/your/project:/project:ro` | Manifest scanning with `rl_protect_scan_manifest` — pass container-relative paths like `"/project/package.json"` | Read-only |
+| `-v /path/to/your/reports:/output` | Report file output with `rl_protect_report` — pass `output_path="/output/report.md"` to write there | Read-write |
 
-Then pass the container-relative path to the tool, e.g. `"/project/package.json"`.
+Keeping the project mount read-only ensures the container can never write back into your source tree. The `/output` mount is separate so write access is scoped only to the reports directory.
 
-Add the `-v` flag to the `args` array in your MCP client configuration. See the per-client examples below.
+Add the relevant `-v` flags to the `args` array in your MCP client configuration. See the per-client examples below.
 
 ### Example setup with Gemini CLI
 
@@ -205,7 +228,8 @@ NOTE: A local `.gemini/settings.json` in your project's directory can override t
       "args": [
         "run", "--rm", "-i",
         "-e", "RL_TOKEN=rlcmm-your-token-here",
-        "-v", "/path/to/your/project:/project",  // optional: for manifest scanning
+        "-v", "/path/to/your/project:/project:ro",  // optional: for manifest scanning
+        "-v", "/path/to/your/reports:/output",       // optional: for report file output
         "reversinglabs/rl-mcp-community:latest"
       ]
     }
@@ -225,7 +249,8 @@ NOTE: A local `.gemini/settings.json` in your project's directory can override t
         "-e", "RL_TOKEN=rls3c-your-token-here",
         "-e", "RL_PORTAL_SERVER=https://my.secure.software/organization",
         "-e", "RL_PORTAL_ORG=MyOrganization",
-        "-v", "/path/to/your/project:/project",  // optional: for manifest scanning
+        "-v", "/path/to/your/project:/project:ro",  // optional: for manifest scanning
+        "-v", "/path/to/your/reports:/output",       // optional: for report file output
         "reversinglabs/rl-mcp-community:latest"
       ]
     }
@@ -239,11 +264,12 @@ NOTE: A local `.gemini/settings.json` in your project's directory can override t
 claude mcp add --transport stdio rl-protect \
   -- docker run --rm -i \
   -e RL_TOKEN=rlcmm-your-token-here \
-  -v /path/to/your/project:/project \
+  -v /path/to/your/project:/project:ro \
+  -v /path/to/your/reports:/output \
   reversinglabs/rl-mcp-community:latest
 ```
 
-Note: the token must be passed via `-e` in the Docker args, not via `--env`, since `--env` sets variables on the host process and they don't propagate into the container. The `-v` mount is optional and only required for manifest scanning.
+Note: the token must be passed via `-e` in the Docker args, not via `--env`, since `--env` sets variables on the host process and they don't propagate into the container. Both `-v` mounts are optional — see [Mounting your project directory](#mounting-your-project-directory).
 
 ### Example setup with Claude Desktop
 
@@ -259,7 +285,8 @@ Add to your Claude Desktop configuration file:
       "args": [
         "run", "--rm", "-i",
         "-e", "RL_TOKEN=rlcmm-your-token-here",
-        "-v", "/path/to/your/project:/project",
+        "-v", "/path/to/your/project:/project:ro",
+        "-v", "/path/to/your/reports:/output",
         "reversinglabs/rl-mcp-community:latest"
       ]
     }
@@ -267,7 +294,7 @@ Add to your Claude Desktop configuration file:
 }
 ```
 
-The `-v` mount is optional and only required for manifest scanning with `rl_protect_scan_manifest`.
+Both `-v` mounts are optional — see [Mounting your project directory](#mounting-your-project-directory).
 
 ### Example setup with Ollama + Continue (Visual Studio Code)
 
@@ -296,7 +323,9 @@ The `-v` mount is optional and only required for manifest scanning with `rl_prot
          - -e
          - RL_TOKEN=rlcmm-your-token-here
          - -v
-         - /path/to/your/project:/project  # optional: for manifest scanning
+         - /path/to/your/project:/project:ro  # optional: for manifest scanning
+         - -v
+         - /path/to/your/reports:/output      # optional: for report file output
          - reversinglabs/rl-mcp-community:latest
        env: {}
    ```
@@ -332,6 +361,7 @@ All configuration is via environment variables passed to the container.
 | `RL_PROTECT_BIN` | `rl-protect` | Path to the `rl-protect` binary |
 | `RL_REPORTS_DIR` | `/app/reports` | Directory where scan reports are stored inside the container |
 | `RL_SCRIPTS_DIR` | `/app/scripts` | Directory where interpretation scripts are located inside the container |
+| `RL_OUTPUT_DIR` | `/output` | Directory where `rl_protect_report` writes Markdown files; mount a host directory here for access |
 
 ### Network
 
@@ -345,3 +375,4 @@ All configuration is via environment variables passed to the container.
 
 <!-- rebuild docker: 2026-04-09; rl-protect 1.0.1.0 -->
 <!-- rebuild docker: 2026-04-09; rl-protect 1.0.2.0 -->
+<!-- rebuild docker: 2026-05-21; rl-protect 1.0.3.0 -->

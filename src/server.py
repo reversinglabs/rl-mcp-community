@@ -11,6 +11,7 @@ RL_PROTECT_BIN = os.environ.get("RL_PROTECT_BIN", "rl-protect")
 SCAN_TIMEOUT = int(os.environ.get("RL_SCAN_TIMEOUT", "600"))
 REPORTS_DIR = os.environ.get("RL_REPORTS_DIR", "/app/reports")
 SCRIPTS_DIR = os.environ.get("RL_SCRIPTS_DIR", "/app/scripts")
+OUTPUT_DIR = os.environ.get("RL_OUTPUT_DIR", "/output")
 
 
 def get_auth_args() -> list[str]:
