@@ -16,6 +16,7 @@ It runs as a Docker container and integrates with any MCP client (Gemini CLI, Cl
       - [`rl_protect_interpret`](#rl_protect_interpret)
       - [`rl_protect_diff_behavior`](#rl_protect_diff_behavior)
       - [`rl_protect_report`](#rl_protect_report)
+    - [Artifact selection](#artifact-selection)
     - [Examples](#examples)
       - [Example 1: Checking a specific package version](#example-1-checking-a-specific-package-version)
       - [Example 2: Scanning a manifest file](#example-2-scanning-a-manifest-file)
@@ -57,6 +58,16 @@ Scan open source packages for supply chain risk. Call this tool before adding, r
 *   `profile` (str, optional): Scanning profile keyword (`minimal`, `baseline`, `hardened`) or path to a custom profile. Default: `hardened`.
 *   `check_deps` (str, optional): Comma-separated dependency scopes to scan. Must include `release` or `develop`. Values: `release`, `develop`, `optional`, `transitive`. Default: `release` only.
 
+The arguments below select a specific artifact for a target platform, so the scan assesses the file that would actually be installed rather than the package as a whole. They apply to PyPI packages only. See [Artifact selection](#artifact-selection).
+
+*   `target_python` (str, optional): Target Python version, e.g. `"3.12"` or `"312"`. Required to enable artifact selection — the other `target_*` arguments do nothing without it.
+*   `target_platform` (str, optional): Comma-separated platform tags or presets.
+*   `target_os` (str, optional): `linux`, `macos`, or `windows`. Must be given with `target_arch`.
+*   `target_arch` (str, optional): `x86_64`, `x86`, or `arm64`. Must be given with `target_os`.
+*   `target_libc` (str, optional): `glibc`, `musl`, or `none`. Requires `target_os` and `target_arch`.
+*   `target_implementation` (str, optional): `cp` (default), `pp`, `jy`, `ip`, or `py`.
+*   `target_abi` (str, optional): Comma-separated ABI tags, e.g. `"cp312,abi3"`.
+
 **Returns:**
 
 A compact JSON summary. Use `rl_protect_summarize` for full assessment detail on any package.
@@ -80,7 +91,7 @@ A compact JSON summary. Use `rl_protect_summarize` for full assessment detail on
 
 #### `rl_protect_scan_manifest`
 
-Scan a manifest or lock file (`package.json`, `requirements.txt`, `pyproject.toml`, `setup.cfg`, `Gemfile`, `gemspec`) for supply chain risk. The file must be accessible inside the container via a volume mount.
+Scan a manifest or lock file for supply chain risk. The file must be accessible inside the container via a volume mount. Supported files are listed at [package-manifest-coverage](https://docs.secure.software/concepts/package-manifest-coverage).
 
 **Arguments:**
 
@@ -88,6 +99,7 @@ Scan a manifest or lock file (`package.json`, `requirements.txt`, `pyproject.tom
 *   `report_name` (str, required): A descriptive name for the report.
 *   `profile` (str, optional): Scanning profile keyword or path. If not specified, the predefined `hardened` profile is used by default.
 *   `check_deps` (str, optional): Comma-separated dependency scopes to scan. Must include `release` or `develop`. Values: `release`, `develop`, `optional`, `transitive`. Default: `release` only.
+*   `target_python`, `target_platform`, `target_os`, `target_arch`, `target_libc`, `target_implementation`, `target_abi` (str, optional): Artifact selection, as described for [`rl_protect_scan`](#rl_protect_scan). PyPI packages only, so they have no effect on a `package.json` or `Gemfile` scan.
 
 **Returns:**
 
@@ -143,6 +155,46 @@ Generate a structured Markdown report from a saved scan report. The report inclu
 **Returns:**
 
 The file path (when `output_path` is provided) or a Markdown string (when omitted).
+
+### Artifact selection
+
+A PyPI package usually ships several artifacts for the same version — one wheel per Python version and platform, plus a source distribution. By default a scan assesses the package as a whole. The `target_*` arguments on `rl_protect_scan` and `rl_protect_scan_manifest` narrow it to the single artifact that would actually be installed on a given platform.
+
+`target_python` switches the feature on. Nothing else takes effect without it.
+
+There are two ways to name the platform, and you should use one or the other rather than both. Supplying both selects the union of the two, which is wider than intended.
+
+The first is `target_platform`, which takes a preset or an explicit platform tag:
+
+| Preset | Aliases | Platform tag |
+| --     | --      | --           |
+| `linux-x86_64`       | `linux-x64`, `linux-amd64` | `manylinux_2_28_x86_64` |
+| `linux-aarch64`      | `linux-arm64`              | `manylinux_2_28_aarch64` |
+| `linux-musl-x86_64`  | `linux-musl-x64`           | `musllinux_1_2_x86_64` |
+| `linux-musl-aarch64` | `linux-musl-arm64`         | `musllinux_1_2_aarch64` |
+| `macos-arm64`        | `macos-aarch64`            | `macosx_11_0_arm64` |
+| `macos-x86_64`       | `macos-x64`, `macos-intel` | `macosx_11_0_x86_64` |
+| `windows-x64`        | `windows-amd64`, `win64`   | `win_amd64` |
+| `windows-x86`        |                            | `win32` |
+| `windows-arm64`      |                            | `win_arm64` |
+
+The second is to compose it from `target_os` and `target_arch`, which must be given together, plus `target_libc` on Linux. `target_os` and `target_libc` accept an optional `:version` suffix that acts as a floor, so `glibc:2.34` accepts manylinux builds for 2.34 or newer and `macos:12.0` accepts a macOS deployment target of 12.0 or newer.
+
+`target_platform` and `target_abi` accept several values as a comma-separated list.
+
+When artifact selection is in effect, each entry in `packages[]` gains an `artifact` field naming the selected file. The `purl` field stays clean:
+
+```json
+{
+  "purl": "pkg:pypi/charset-normalizer@3.4.9",
+  "artifact": "charset_normalizer-3.4.9-cp312-cp312-manylinux_2_28_x86_64.whl",
+  "recommendation": "APPROVE",
+  "worst_status": "pass",
+  "worst_label": ""
+}
+```
+
+If no artifact matches the target, rl-protect falls back to the version's source distribution when one exists. Otherwise no artifact is pinned.
 
 ### Examples
 

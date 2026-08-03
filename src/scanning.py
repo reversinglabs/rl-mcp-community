@@ -30,6 +30,71 @@ def _normalize_purls(purls: str) -> str:
     return ",".join(p.strip() for p in purls.split(","))
 
 
+def _split_csv(value: str | None) -> list[str]:
+    """Split a comma-separated input into values, dropping whitespace and blanks."""
+    return [v.strip() for v in (value or "").split(",") if v.strip()]
+
+
+def _target_args(
+    *,
+    target_python: str | None = None,
+    target_os: str | None = None,
+    target_arch: str | None = None,
+    target_libc: str | None = None,
+    target_platform: str | None = None,
+    target_implementation: str | None = None,
+    target_abi: str | None = None,
+) -> list[str]:
+    """Build the rl-protect artifact selection flags.
+
+    Artifact selection pins the scan to the artifact that would be installed on a
+    specific platform, instead of assessing the package as a whole.  It currently
+    applies to PyPI packages only.
+
+    rl-protect enforces these rules itself, but it does so after the process has
+    started.  Checking here turns a subprocess failure into a message the caller
+    can act on.
+    """
+    if not target_python:
+        used = sorted(
+            name for name, value in (
+                ("target_os", target_os),
+                ("target_arch", target_arch),
+                ("target_libc", target_libc),
+                ("target_platform", target_platform),
+                ("target_implementation", target_implementation),
+                ("target_abi", target_abi),
+            ) if value
+        )
+        if used:
+            raise ValueError(
+                f"target_python is required when selecting artifacts. Got {', '.join(used)} without it."
+            )
+        return []
+
+    if bool(target_os) != bool(target_arch):
+        raise ValueError("target_os and target_arch must be provided together.")
+    if target_libc and not target_os:
+        raise ValueError("target_libc requires target_os and target_arch.")
+
+    args = ["--target-python", target_python]
+    for flag, value in (
+        ("--target-os", target_os),
+        ("--target-arch", target_arch),
+        ("--target-libc", target_libc),
+        ("--target-implementation", target_implementation),
+    ):
+        if value:
+            args += [flag, value]
+
+    # --target-platform and --target-abi are repeatable and take one value each
+    for flag, value in (("--target-platform", target_platform), ("--target-abi", target_abi)):
+        for item in _split_csv(value):
+            args += [flag, item]
+
+    return args
+
+
 def _run_scan(
     target: str,
     *,
@@ -133,12 +198,19 @@ def _format_result(report: dict, report_id: str) -> str:
         rec = pkg_analysis.get("recommendation", "APPROVE")
         assessment = pkg_analysis.get("assessment", {})
         ws = _worst_status(assessment)
-        packages.append({
-            "purl": pkg.get("purl", ""),
+        # With artifact selection the purl carries a ?artifact=<file> qualifier.
+        # Keep purl clean and report the artifact separately, so callers that
+        # split the purl into name and version are unaffected.
+        purl, _, qualifier = pkg.get("purl", "").partition("?")
+        entry = {
+            "purl": purl,
             "recommendation": rec,
             "worst_status": ws,
             "worst_label": _worst_label(pkg_analysis),
-        })
+        }
+        if qualifier:
+            entry["artifact"] = (pkg.get("artifact") or {}).get("name", "")
+        packages.append(entry)
         if rec == "REJECT":
             n_reject += 1
         elif ws in ("warning", "fail"):
@@ -169,6 +241,13 @@ async def rl_protect_scan(
     report_name: str,
     profile: str | None = None,
     check_deps: str | None = None,
+    target_python: str | None = None,
+    target_platform: str | None = None,
+    target_os: str | None = None,
+    target_arch: str | None = None,
+    target_libc: str | None = None,
+    target_implementation: str | None = None,
+    target_abi: str | None = None,
 ) -> str:
     """Scan open source packages for supply chain risk using ReversingLabs Spectra Assure.
 
@@ -197,6 +276,7 @@ async def rl_protect_scan(
       summary: {reject, warn, pass, total}
       packages[]: each with {purl, recommendation (APPROVE/REJECT),
         worst_status (pass/warning/fail), worst_label (human-readable worst check)}
+        and, when artifact selection was used, artifact (the selected file name)
       errors[]: packages that could not be scanned
 
     DISPLAY INSTRUCTIONS — you MUST render the report exactly as follows.
@@ -234,6 +314,8 @@ async def rl_protect_scan(
       |---|---|---|---|
       | {name} | {version} | ✅ or ⚠️ or ❌ | {worst_label, or "—" if none} |
 
+      Add an "Artifact" column only if the packages carry an artifact field.
+
       ---
 
       ❌ **REJECT** {N} · ⚠️ **WARN** {N} · ✅ **PASS** {N}
@@ -247,8 +329,37 @@ async def rl_protect_scan(
         check_deps: Comma-separated dependency scopes to scan. Must include release or develop.
             Values: release, develop, optional, transitive. Default (omit): release only.
             Example: "release,develop" or "release,develop,optional,transitive".
+
+        The remaining arguments select a specific artifact for a target platform, so the
+        scan assesses the file that would actually be installed. PyPI packages only.
+        Omit them all to assess the package as a whole.
+
+        target_python: Target Python version, e.g. "3.12" or "312". Required to enable
+            artifact selection: the other target_* arguments do nothing without it.
+        target_platform: Comma-separated platform tags (e.g. "manylinux_2_28_x86_64") or
+            presets: linux-x86_64, linux-aarch64, linux-musl-x86_64, linux-musl-aarch64,
+            macos-arm64, macos-x86_64, windows-x64, windows-x86, windows-arm64.
+        target_os: Target OS: linux, macos, or windows. Optional ":version" as a macOS
+            deployment-target floor, e.g. "macos:12.0". Must be given with target_arch.
+            This is an alternative to target_platform, not an addition to it — supplying
+            both selects the union of the two, which is usually wider than intended.
+        target_arch: Target CPU architecture: x86_64, x86, or arm64. Must be given with target_os.
+        target_libc: Target Linux libc: glibc, musl, or none. Optional ":version" as a
+            floor, e.g. "glibc:2.34". Requires target_os and target_arch.
+        target_implementation: Target Python interpreter: cp (default), pp, jy, ip, or py.
+        target_abi: Comma-separated ABI tags, e.g. "cp312,abi3". Derived from target_python
+            when omitted.
     """
-    extra_args = ["--check-deps", check_deps] if check_deps else None
+    extra_args = ["--check-deps", check_deps] if check_deps else []
+    extra_args += _target_args(
+        target_python=target_python,
+        target_os=target_os,
+        target_arch=target_arch,
+        target_libc=target_libc,
+        target_platform=target_platform,
+        target_implementation=target_implementation,
+        target_abi=target_abi,
+    )
     report, report_id = await asyncio.to_thread(
         _run_scan, _normalize_purls(purls),
         report_name=report_name, profile=profile, extra_args=extra_args,
@@ -262,12 +373,22 @@ async def rl_protect_scan_manifest(
     report_name: str,
     profile: str | None = None,
     check_deps: str | None = None,
+    target_python: str | None = None,
+    target_platform: str | None = None,
+    target_os: str | None = None,
+    target_arch: str | None = None,
+    target_libc: str | None = None,
+    target_implementation: str | None = None,
+    target_abi: str | None = None,
 ) -> str:
     """Scan a manifest or lock file for supply chain risk using ReversingLabs Spectra Assure.
 
-    Use this tool to scan project dependency files (package.json, requirements.txt,
-    pyproject.toml, setup.cfg, Gemfile, gemspec) that are accessible inside the
-    container.
+    Use this tool to scan project dependency files that are accessible inside the
+    container. Supported files:
+      Node.js  package.json, package-lock.json, pnpm-lock.yaml, yarn.lock (Classic)
+      Python   requirements.txt, pyproject.toml, setup.cfg, poetry.lock, uv.lock
+      Ruby     Gemfile, gemspec, Gemfile.lock
+    Prefer the lock file when the project has one — it pins exact versions.
 
     IMPORTANT — Volume mount required: The MCP server runs inside a Docker container
     and cannot access host files directly. The user must mount their project directory
@@ -284,6 +405,7 @@ async def rl_protect_scan_manifest(
       summary: {reject, warn, pass, total}
       packages[]: each with {purl, recommendation (APPROVE/REJECT),
         worst_status (pass/warning/fail), worst_label (human-readable worst check)}
+        and, when artifact selection was used, artifact (the selected file name)
       errors[]: packages that could not be scanned
 
     DISPLAY INSTRUCTIONS — you MUST render the report exactly as follows.
@@ -321,6 +443,8 @@ async def rl_protect_scan_manifest(
       |---|---|---|---|
       | {name} | {version} | ✅ or ⚠️ or ❌ | {worst_label, or "—" if none} |
 
+      Add an "Artifact" column only if the packages carry an artifact field.
+
       ---
 
       ❌ **REJECT** {N} · ⚠️ **WARN** {N} · ✅ **PASS** {N}
@@ -334,8 +458,39 @@ async def rl_protect_scan_manifest(
         check_deps: Comma-separated dependency scopes to scan. Must include release or develop.
             Values: release, develop, optional, transitive. Default (omit): release only.
             Example: "release,develop" or "release,develop,optional,transitive".
+
+        The remaining arguments select a specific artifact for a target platform, so the
+        scan assesses the file that would actually be installed. PyPI packages only, so
+        they have no effect on a package.json or Gemfile scan. Use them when you know the
+        deployment target, for example from a Dockerfile base image or a CI matrix.
+        Omit them all to assess each package as a whole.
+
+        target_python: Target Python version, e.g. "3.12" or "312". Required to enable
+            artifact selection: the other target_* arguments do nothing without it.
+        target_platform: Comma-separated platform tags (e.g. "manylinux_2_28_x86_64") or
+            presets: linux-x86_64, linux-aarch64, linux-musl-x86_64, linux-musl-aarch64,
+            macos-arm64, macos-x86_64, windows-x64, windows-x86, windows-arm64.
+        target_os: Target OS: linux, macos, or windows. Optional ":version" as a macOS
+            deployment-target floor, e.g. "macos:12.0". Must be given with target_arch.
+            This is an alternative to target_platform, not an addition to it — supplying
+            both selects the union of the two, which is usually wider than intended.
+        target_arch: Target CPU architecture: x86_64, x86, or arm64. Must be given with target_os.
+        target_libc: Target Linux libc: glibc, musl, or none. Optional ":version" as a
+            floor, e.g. "glibc:2.34". Requires target_os and target_arch.
+        target_implementation: Target Python interpreter: cp (default), pp, jy, ip, or py.
+        target_abi: Comma-separated ABI tags, e.g. "cp312,abi3". Derived from target_python
+            when omitted.
     """
-    extra_args = ["--check-deps", check_deps] if check_deps else None
+    extra_args = ["--check-deps", check_deps] if check_deps else []
+    extra_args += _target_args(
+        target_python=target_python,
+        target_os=target_os,
+        target_arch=target_arch,
+        target_libc=target_libc,
+        target_platform=target_platform,
+        target_implementation=target_implementation,
+        target_abi=target_abi,
+    )
     report, report_id = await asyncio.to_thread(
         _run_scan, manifest_path, report_name=report_name, profile=profile, extra_args=extra_args,
     )
