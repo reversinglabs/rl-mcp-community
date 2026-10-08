@@ -31,6 +31,7 @@ Exit codes:
     2   Report file not found, invalid JSON, or unknown task.
 """
 
+from __future__ import annotations
 import argparse
 import json
 import sys

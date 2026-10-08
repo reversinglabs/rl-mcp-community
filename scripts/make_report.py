@@ -22,10 +22,23 @@ def relative_date(iso_str, reference=None):
     if not iso_str:
         return None
     published = _parse_iso(iso_str)
+    if not published:
+        return None
     try:
-        delta = (reference or datetime.now(timezone.utc)) - published
-        days = delta.days
-        if days < 1:
+        now = reference or datetime.now(timezone.utc)
+        # Compare CALENDAR dates, not elapsed 24h periods: a timestamp is "today"
+        # only while it falls on the current calendar day — once the day rolls
+        # over it is "yesterday", regardless of how many hours have elapsed.
+        # Normalize both into the published timestamp's own timezone so the day
+        # boundary is consistent (aware vs naive is handled defensively).
+        if published.tzinfo is not None:
+            if now.tzinfo is None:
+                now = now.replace(tzinfo=timezone.utc)
+            now = now.astimezone(published.tzinfo)
+        elif now.tzinfo is not None:
+            now = now.replace(tzinfo=None)
+        days = (now.date() - published.date()).days
+        if days <= 0:
             return "today"
         if days == 1:
             return "yesterday"
@@ -51,11 +64,7 @@ SIGNAL_LABELS = {
     "MANDATE": "📋 mandate",
 }
 
-ASSESSMENTS = ["secrets", "licenses", "vulnerabilities", "hardening", "tampering", "malware", "repository"]
-
-# Display priority when multiple categories share the same worst grade.
-# Repository is always last — only shown if no other category has a finding.
-ASSESSMENT_PRIORITY = ["malware", "tampering", "vulnerabilities", "secrets", "hardening", "licenses", "repository"]
+ASSESSMENT_ORDER = ["malware", "tampering", "vulnerabilities", "secrets", "hardening", "licenses", "repository"]
 ASSESSMENT_NAMES = {
     "malware": "Malware",
     "tampering": "Tampering",
@@ -86,6 +95,7 @@ TEMPLATES = {
         show_details=False,
     ),
     "expanded": ReportConfig(
+        level="warn",
         license_info=True,
     ),
     "verbose": ReportConfig(
@@ -109,24 +119,31 @@ def short_purl(purl):
 def build_reverse_deps(all_packages):
     reverse_deps = {}
     for p in all_packages:
+        parent = p.get("purl", "").split("?")[0]
         for dep in p.get("dependencies", []):
-            reverse_deps.setdefault(dep, []).append(p.get("purl", ""))
+            reverse_deps.setdefault(dep, []).append(parent)
     return reverse_deps
 
 
 def find_inclusion(target_purl, reverse_deps):
-    all_paths = []
+    root_paths = []
+    cycle_paths = []
     queue = deque([[target_purl]])
     while queue:
         path = queue.popleft()
         parents = reverse_deps.get(path[-1], [])
+        fresh = [p for p in parents if p not in path]
         if not parents:
-            all_paths.append(list(reversed(path)))
+            root_paths.append(list(reversed(path)))
+        elif not fresh:
+            # A cycle tops a chain only when no real root exists and it does not loop back to the target.
+            if target_purl not in parents:
+                cycle_paths.append(list(reversed(path)))
         else:
-            for parent in parents:
-                if parent not in path:
-                    queue.append(path + [parent])
+            for parent in fresh:
+                queue.append(path + [parent])
 
+    all_paths = root_paths or cycle_paths
     if not all_paths or all_paths == [[target_purl]]:
         return None
 
@@ -263,7 +280,7 @@ def assessment_table(assessment, show_overrides=False):
     if not assessment:
         return ""
     rows = ["| Assessment | Result |", "|---|---|"]
-    for key in ASSESSMENTS:
+    for key in ASSESSMENT_ORDER:
         a = assessment.get(key, {})
         if not a:
             continue
@@ -279,7 +296,7 @@ def simplified_assessment_block(assessment, show_overrides=False):
         return ""
     fails = []
     warnings = []
-    for key in ASSESSMENTS:
+    for key in ASSESSMENT_ORDER:
         a = assessment.get(key, {})
         if not a:
             continue
@@ -367,7 +384,7 @@ def deployment_risk(pkg):
         if g.get("status") == "blocked":
             return "Governance block"
     assessment = analysis.get("assessment", {})
-    for key in ASSESSMENT_PRIORITY:
+    for key in ASSESSMENT_ORDER:
         a = assessment.get(key, {})
         if not a:
             continue
@@ -440,7 +457,7 @@ def deployment_risk_label(pkg):
         if g.get("status") == "blocked":
             return "🚫 Governance block"
     assessment = analysis.get("assessment", {})
-    for key in ASSESSMENT_PRIORITY:
+    for key in ASSESSMENT_ORDER:
         a = assessment.get(key, {})
         if not a:
             continue
@@ -456,7 +473,7 @@ def deployment_risk_label(pkg):
 
 def _summary_row(pkg, status_cell, reverse_deps, link_to_reports):
     purl = pkg.get("purl", "unknown").split("?")[0]
-    icon = "🔗" if purl in reverse_deps else "📦"
+    icon = "📦" if find_inclusion(purl, reverse_deps) is None else "🔗"
     report_url = pkg.get("analysis", {}).get("report", "")
     href = report_url if link_to_reports and report_url else f"#{purl_to_anchor(purl)}"
     return f"| {icon} [`{purl}`]({href}) | {status_cell} | {deployment_risk_label(pkg)} |"
@@ -484,7 +501,8 @@ def format_package(pkg, config, index=None, total=None, inclusion=None, scan_tim
         tags += " [REMOVED]"
     if pkg.get("quarantined"):
         tags += " [QUARANTINED]"
-    heading = f"#### 📦 **`{purl}`** — {STATUS_LABELS.get(status, '')}{counter}{tags}"
+    icon = "🔗" if inclusion else "📦"
+    heading = f"#### {icon} **`{purl}`** — {STATUS_LABELS.get(status, '')}{counter}{tags}"
     if inclusion:
         heading += f"<br>{inclusion}"
     parts = [f'<a id="{purl_to_anchor(purl)}"></a>', heading]
@@ -557,7 +575,10 @@ def _format_duration(duration_str):
             return f"{h}h {m}m"
         if m > 0:
             return f"{m}m {int(s)}s"
-        return f"{s:.1f}s".rstrip("0").rstrip(".")  + "s" if "." in f"{s:.1f}" else f"{int(s)}s"
+        secs = f"{s:.1f}"
+        if secs.endswith(".0"):
+            secs = secs[:-2]
+        return f"{secs}s"
     except (IndexError, ValueError):
         return duration_str
 
@@ -639,13 +660,13 @@ def build_report(report_data, config, report_path="rl-protect.report.json", mani
     if config.show_details and rejected:
         lines += ["", "## ❌ Rejected packages", ""]
         for i, pkg in enumerate(sorted_rejected, 1):
-            inclusion = find_inclusion(pkg.get("purl", ""), reverse_deps)
+            inclusion = find_inclusion(pkg.get("purl", "").split("?")[0], reverse_deps)
             lines += [format_package(pkg, config, i, len(sorted_rejected), inclusion, scan_time=scan_time), "", "---"]
 
     if config.show_details and warnings_pkgs and config.level in ("warn", "pass"):
         lines += ["", "## ⚠️ Scan warnings", "", "*Packages with issues that did not meet the rejection threshold.*", ""]
         for i, pkg in enumerate(sorted_warnings, 1):
-            inclusion = find_inclusion(pkg.get("purl", ""), reverse_deps)
+            inclusion = find_inclusion(pkg.get("purl", "").split("?")[0], reverse_deps)
             lines += [format_package(pkg, config, i, len(sorted_warnings), inclusion, scan_time=scan_time), "", "---"]
 
     if config.show_details and passing and config.level == "pass":

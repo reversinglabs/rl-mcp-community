@@ -147,7 +147,7 @@ Generate a structured Markdown report from a saved scan report. The report inclu
     | Template | Content |
     |----------|---------|
     | `concise` | Summary table (linked to Spectra Assure Community) + Version Update Plan only |
-    | `expanded` | Rejected packages with assessment, vulnerabilities, and license info |
+    | `expanded` | Rejected and warning packages with assessment, vulnerabilities, and license info |
     | `verbose` | Full detail: rejected + warnings + passing, assessment table, policy violations |
 
 *   `output_path` (str, optional): Container path inside `/output` where the Markdown file will be written (e.g. `"/output/report.md"`). Requires the `/output` volume mount. When omitted, the Markdown is returned as a string.
@@ -428,3 +428,4 @@ All configuration is via environment variables passed to the container.
 <!-- rebuild docker: 2026-04-09; rl-protect 1.0.1.0 -->
 <!-- rebuild docker: 2026-04-09; rl-protect 1.0.2.0 -->
 <!-- rebuild docker: 2026-05-21; rl-protect 1.0.3.0 -->
+<!-- rebuild docker: 2026-10-08; rl-protect 1.1.1.0 -->

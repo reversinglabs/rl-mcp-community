@@ -33,6 +33,7 @@ Exit codes:
     2   Report file not found, invalid JSON, or unable to match package versions.
 """
 
+from __future__ import annotations
 import argparse
 import json
 import sys
@@ -496,7 +497,7 @@ def print_diff(old_pkg: dict, new_pkg: dict) -> int:
     new_risks = False
 
     # Header
-    print(f"## Behavior diff\n")
+    print("## Behavior diff\n")
     print(f"  Old: {old_rec_icon} {old_rec}  →  {old_purl}")
     print(f"  New: {new_rec_icon} {new_rec}  →  {new_purl}")
 
@@ -510,7 +511,7 @@ def print_diff(old_pkg: dict, new_pkg: dict) -> int:
 
     # Assessment diff
     assess_changes = diff_assessments(old_pkg, new_pkg)
-    print(f"\n### Assessment changes\n")
+    print("\n### Assessment changes\n")
     if assess_changes:
         rows = []
         for name, old_s, new_s, old_l, new_l in assess_changes:
@@ -536,7 +537,7 @@ def print_diff(old_pkg: dict, new_pkg: dict) -> int:
 
     # Policy violation diff
     pv_added, pv_removed, pv_changed = diff_policy_violations(old_pkg, new_pkg)
-    print(f"\n### Policy violation changes\n")
+    print("\n### Policy violation changes\n")
 
     if pv_added:
         new_risks = True
@@ -575,7 +576,7 @@ def print_diff(old_pkg: dict, new_pkg: dict) -> int:
 
     # Indicator diff
     ind_added, ind_removed, ind_changed = diff_indicators(old_pkg, new_pkg)
-    print(f"\n### Behavior indicators\n")
+    print("\n### Behavior indicators\n")
 
     if ind_added:
         new_risks = True
@@ -606,7 +607,7 @@ def print_diff(old_pkg: dict, new_pkg: dict) -> int:
 
     # Classification diff
     cls_added, cls_removed = diff_classifications(old_pkg, new_pkg)
-    print(f"\n### Malicious / suspicious file changes\n")
+    print("\n### Malicious / suspicious file changes\n")
 
     if cls_added:
         new_risks = True
@@ -633,7 +634,7 @@ def print_diff(old_pkg: dict, new_pkg: dict) -> int:
 
     # Vulnerability diff
     vuln_added, vuln_fixed = diff_vulnerabilities(old_pkg, new_pkg)
-    print(f"\n### Vulnerability changes\n")
+    print("\n### Vulnerability changes\n")
 
     if vuln_added:
         new_risks = True

@@ -132,6 +132,10 @@ dmypy.json
 
 # Claude Code local settings (may contain tokens)
 .claude/
+.mcp.json
+
+# Local session notes
+HANDOFF.md
 
 # MCP server report output
 output/

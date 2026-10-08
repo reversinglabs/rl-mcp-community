@@ -161,7 +161,8 @@ async def rl_protect_report(
     Template options (default: expanded):
       concise  — summary table linked to Spectra Assure Community + version update plan only;
                  no per-package detail sections
-      expanded — rejected packages with simplified assessment, vulnerability table, and license info
+      expanded — rejected and warning packages with simplified assessment, vulnerability table,
+                 and license info
       verbose  — full detail: rejected + warnings + passing, assessment table,
                  policy violations table, override audit trail
 
@@ -190,7 +191,7 @@ async def rl_protect_report(
     report_data = json.loads(path.read_text(encoding="utf-8"))
 
     if template is None:
-        config = s.ReportConfig()
+        config = s.TEMPLATES["expanded"]
     elif template in s.TEMPLATES:
         config = s.TEMPLATES[template]
     else:

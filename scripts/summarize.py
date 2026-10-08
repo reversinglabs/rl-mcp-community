@@ -25,6 +25,7 @@ Exit codes:
     2   Report file not found or invalid JSON.
 """
 
+from __future__ import annotations
 import argparse
 import json
 import sys
@@ -326,10 +327,16 @@ def format_errors_json(errors: list) -> list:
 
 def parse_args(argv: list):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("report", nargs="?", type=Path, default=Path("rl-protect.report.json"))
+    p.add_argument("report", nargs="?", type=Path, default=None)
+    p.add_argument("--report", dest="report_flag", type=Path, default=None, metavar="PATH")
     p.add_argument("--no-error-code", action="store_true")
     p.add_argument("--json", action="store_true", dest="json_output")
-    return p.parse_args(argv[1:])
+    args = p.parse_args(argv[1:])
+    if args.report is None and args.report_flag is None:
+        args.report = Path("rl-protect.report.json")
+    elif args.report is None:
+        args.report = args.report_flag
+    return args
 
 
 def main():
